@@ -9,6 +9,8 @@
 #include <bitset>
 #include <cstdint>
 #include <string>
+#include <array>
+#include <GLFW/glfw3.h>
 
 using namespace std;
 
@@ -129,8 +131,8 @@ public:
         cache[idx].valid = true;
         cache[idx].tag = tag;
         string content = disk->readFile("program.asm");
-        for (int i = 0; i < 64 && i < content.size(); i++)
-            cache[idx].data[i] = content[i + tag*64];
+        for (size_t i = 0; i < 64 && i + tag * 64 < content.size(); i++)
+            cache[idx].data[i] = content[i + tag * 64];
         return cache[idx].data[offset];
     }
 
@@ -176,7 +178,6 @@ public:
         if (debugMode) cout << "\n=== EXECUTING PROGRAM ===\n";
         istringstream iss(code);
         string line;
-        int lineNum = 0;
         unordered_map<string, int> labels;
         vector<string> lines;
 
@@ -410,10 +411,14 @@ private:
     }
 
     uint16_t getRegister(const string& reg) {
-        if (reg == "AX") return AX; if (reg == "BX") return BX;
-        if (reg == "CX") return CX; if (reg == "DX") return DX;
-        if (reg == "SP") return SP; if (reg == "BP") return BP;
-        if (reg == "SI") return SI; if (reg == "DI") return DI;
+        if (reg == "AX") return AX;
+        if (reg == "BX") return BX;
+        if (reg == "CX") return CX;
+        if (reg == "DX") return DX;
+        if (reg == "SP") return SP;
+        if (reg == "BP") return BP;
+        if (reg == "SI") return SI;
+        if (reg == "DI") return DI;
         return 0;
     }
 
@@ -426,173 +431,238 @@ private:
 };
 
 // ============================================================
-//  3. CONSOLE INTERFACE
+//  3. FULL-SCREEN GLFW TERMINAL INTERFACE
 // ============================================================
-class ConsoleInterface {
+class TerminalInterface {
 private:
     VirtualDisk disk;
     CPU cpu;
-    bool running = true;
-    string currentFile = "";
-    bool debugMode = true;
+    GLFWwindow* window = nullptr;
+    string editor =
+        "; HELLO FROM THE 16-BIT CPU\n"
+        "MOV AX 0x002A\n"
+        "MOV BX 0x0008\n"
+        "ADD AX BX\n"
+        "OUT 1 AX\n"
+        "HLT\n";
+    string log = "SYSTEM READY.  EDIT THE PROGRAM AND PRESS F5 TO RUN.\n";
+    string status = "ONLINE";
+    bool showHelp = false;
+    bool cursorVisible = true;
+    double lastBlink = 0.0;
 
-    void showHelp() {
-        cout << "\n========================================\n";
-        cout << "  COMMAND LIST\n";
-        cout << "========================================\n";
-        cout << "  PROGRAM <file> = <code> | <code> | ...\n";
-        cout << "    Create a program file with multiple lines\n";
-        cout << "    Example: PROGRAM test.asm = MOV AX 10 | ADD AX 20 | HLT\n";
-        cout << "\n  APPEND <file> <code> | <code> | ...\n";
-        cout << "    Append lines to an existing file\n";
-        cout << "\n  RUN <file>\n";
-        cout << "    Execute the program from file\n";
-        cout << "\n  SHOW <file>\n";
-        cout << "    Display the contents of a file\n";
-        cout << "\n  REGS\n";
-        cout << "    Show all registers and flags\n";
-        cout << "\n  RESET\n";
-        cout << "    Reset CPU and disk to initial state\n";
-        cout << "\n  DEBUG ON/OFF\n";
-        cout << "    Enable or disable debug output\n";
-        cout << "\n  DUMP <addr> <length>\n";
-        cout << "    Dump memory from address with given length\n";
-        cout << "    Example: DUMP 0x100 16\n";
-        cout << "\n  PEEK <addr>\n";
-        cout << "    Read a byte from memory address\n";
-        cout << "    Example: PEEK 0x200\n";
-        cout << "\n  LS\n";
-        cout << "    List all files on the virtual disk\n";
-        cout << "\n  HELP\n";
-        cout << "    Show this help message\n";
-        cout << "\n  EXIT\n";
-        cout << "    Exit the emulator\n";
-        cout << "========================================\n";
+    void appendLog(const string& message) {
+        log += message;
+        if (!log.empty() && log.back() != '\n') log += '\n';
+        constexpr size_t maxLogLength = 2600;
+        if (log.size() > maxLogLength) log.erase(0, log.size() - maxLogLength);
+    }
+
+    void runProgram() {
+        status = "EXECUTING";
+        cpu.setDebug(true);
+        ostringstream captured;
+        streambuf* oldBuffer = cout.rdbuf(captured.rdbuf());
+        cpu.executeProgram(editor);
+        cout.rdbuf(oldBuffer);
+        appendLog("[EXEC] PROGRAM FINISHED");
+        appendLog(captured.str());
+        status = "ONLINE";
+    }
+
+    void resetMachine() {
+        disk.reset();
+        cpu.reset();
+        status = "RESET COMPLETE";
+        appendLog("[SYSTEM] CPU, CACHE AND VIRTUAL DISK RESET.");
+    }
+
+    static void errorCallback(int, const char* description) {
+        cerr << "GLFW error: " << description << '\n';
+    }
+
+    static void keyCallback(GLFWwindow* window, int key, int, int action, int) {
+        if (action != GLFW_PRESS && action != GLFW_REPEAT) return;
+        auto* app = static_cast<TerminalInterface*>(glfwGetWindowUserPointer(window));
+        if (!app) return;
+        if (key == GLFW_KEY_ESCAPE || key == GLFW_KEY_F10) glfwSetWindowShouldClose(window, GLFW_TRUE);
+        else if (key == GLFW_KEY_F1) app->showHelp = !app->showHelp;
+        else if (app->showHelp) return;
+        else if (key == GLFW_KEY_F5) app->runProgram();
+        else if (key == GLFW_KEY_F2) app->resetMachine();
+        else if (key == GLFW_KEY_BACKSPACE && !app->editor.empty()) app->editor.pop_back();
+        else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) app->editor += '\n';
+    }
+
+    static void charCallback(GLFWwindow* window, unsigned int codepoint) {
+        auto* app = static_cast<TerminalInterface*>(glfwGetWindowUserPointer(window));
+        if (!app || app->showHelp || codepoint < 32 || codepoint > 126) return;
+        app->editor += static_cast<char>(codepoint);
+    }
+
+
+    static const array<uint8_t, 7>& glyph(char c) {
+        static const array<uint8_t, 7> empty{};
+        static const unordered_map<char, array<uint8_t, 7>> font = {
+            {'A',{0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}}, {'B',{0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E}},
+            {'C',{0x0F,0x10,0x10,0x10,0x10,0x10,0x0F}}, {'D',{0x1E,0x11,0x11,0x11,0x11,0x11,0x1E}},
+            {'E',{0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}}, {'F',{0x1F,0x10,0x10,0x1E,0x10,0x10,0x10}},
+            {'G',{0x0F,0x10,0x10,0x17,0x11,0x11,0x0F}}, {'H',{0x11,0x11,0x11,0x1F,0x11,0x11,0x11}},
+            {'I',{0x1F,0x04,0x04,0x04,0x04,0x04,0x1F}}, {'J',{0x07,0x02,0x02,0x02,0x02,0x12,0x0C}},
+            {'K',{0x11,0x12,0x14,0x18,0x14,0x12,0x11}}, {'L',{0x10,0x10,0x10,0x10,0x10,0x10,0x1F}},
+            {'M',{0x11,0x1B,0x15,0x15,0x11,0x11,0x11}}, {'N',{0x11,0x19,0x15,0x13,0x11,0x11,0x11}},
+            {'O',{0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}}, {'P',{0x1E,0x11,0x11,0x1E,0x10,0x10,0x10}},
+            {'Q',{0x0E,0x11,0x11,0x11,0x15,0x12,0x0D}}, {'R',{0x1E,0x11,0x11,0x1E,0x14,0x12,0x11}},
+            {'S',{0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E}}, {'T',{0x1F,0x04,0x04,0x04,0x04,0x04,0x04}},
+            {'U',{0x11,0x11,0x11,0x11,0x11,0x11,0x0E}}, {'V',{0x11,0x11,0x11,0x11,0x11,0x0A,0x04}},
+            {'W',{0x11,0x11,0x11,0x15,0x15,0x15,0x0A}}, {'X',{0x11,0x11,0x0A,0x04,0x0A,0x11,0x11}},
+            {'Y',{0x11,0x11,0x0A,0x04,0x04,0x04,0x04}}, {'Z',{0x1F,0x01,0x02,0x04,0x08,0x10,0x1F}},
+            {'0',{0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}}, {'1',{0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}},
+            {'2',{0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}}, {'3',{0x1E,0x01,0x01,0x0E,0x01,0x01,0x1E}},
+            {'4',{0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}}, {'5',{0x1F,0x10,0x10,0x1E,0x01,0x01,0x1E}},
+            {'6',{0x0E,0x10,0x10,0x1E,0x11,0x11,0x0E}}, {'7',{0x1F,0x01,0x02,0x04,0x08,0x08,0x08}},
+            {'8',{0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}}, {'9',{0x0E,0x11,0x11,0x0F,0x01,0x01,0x0E}},
+            {'-',{0,0,0,0x1F,0,0,0}}, {'_',{0,0,0,0,0,0,0x1F}}, {'=',{0,0x1F,0,0x1F,0,0,0}},
+            {'.',{0,0,0,0,0,0x06,0x06}}, {':',{0,0x06,0x06,0,0x06,0x06,0}}, {'/',{0x01,0x02,0x04,0x08,0x10,0,0}},
+            {'[',{0x0E,0x08,0x08,0x08,0x08,0x08,0x0E}}, {']',{0x0E,0x02,0x02,0x02,0x02,0x02,0x0E}},
+            {'!',{0x04,0x04,0x04,0x04,0x04,0,0x04}}, {'>',{0x10,0x08,0x04,0x02,0x04,0x08,0x10}},
+            {'<',{0x01,0x02,0x04,0x08,0x04,0x02,0x01}}, {'?',{0x0E,0x11,0x01,0x02,0x04,0,0x04}},
+            {'(',{0x02,0x04,0x08,0x08,0x08,0x04,0x02}}, {')',{0x08,0x04,0x02,0x02,0x02,0x04,0x08}},
+            {',',{0,0,0,0,0x06,0x06,0x04}}, {';',{0,0x06,0x06,0,0x06,0x06,0x04}}, {'*',{0,0x15,0x0E,0x1F,0x0E,0x15,0}},
+            {'+',{0,0x04,0x04,0x1F,0x04,0x04,0}}, {'|',{0x04,0x04,0x04,0x04,0x04,0x04,0x04}}
+        };
+        auto it = font.find(static_cast<char>(toupper(static_cast<unsigned char>(c))));
+        return it == font.end() ? empty : it->second;
+    }
+
+    static void rect(float x, float y, float w, float h, float r, float g, float b, float a = 1.0f) {
+        glColor4f(r, g, b, a); glBegin(GL_QUADS);
+        glVertex2f(x, y); glVertex2f(x + w, y); glVertex2f(x + w, y + h); glVertex2f(x, y + h); glEnd();
+    }
+
+    static void text(float x, float y, const string& value, float scale, float r, float g, float b) {
+        const float start = x, advance = 6.0f * scale, line = 9.0f * scale;
+        glColor3f(r, g, b); glBegin(GL_QUADS);
+        for (char c : value) {
+            if (c == '\n') { x = start; y += line; continue; }
+            for (int row = 0; row < 7; ++row) for (int col = 0; col < 5; ++col)
+                if (glyph(c)[row] & (1 << (4 - col))) {
+                    const float px = x + col * scale, py = y + row * scale;
+                    glVertex2f(px, py); glVertex2f(px + scale, py); glVertex2f(px + scale, py + scale); glVertex2f(px, py + scale);
+                }
+            x += advance;
+        }
+        glEnd();
+    }
+
+    static vector<string> linesFor(const string& value, size_t maxColumns, size_t maxLines) {
+        vector<string> lines;
+        istringstream stream(value); string line;
+        while (getline(stream, line) && lines.size() < maxLines) {
+            if (line.empty()) { lines.push_back(" "); continue; }
+            while (line.size() > maxColumns && lines.size() < maxLines) { lines.push_back(line.substr(0, maxColumns)); line.erase(0, maxColumns); }
+            if (lines.size() < maxLines) lines.push_back(line);
+        }
+        return lines;
+    }
+
+    void draw(int width, int height) {
+        glViewport(0, 0, width, height);
+        glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, width, height, 0, -1, 1);
+        glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+
+        // Desk-like backdrop and a warm, thick CRT enclosure inspired by 1980s terminals.
+        glClearColor(0.055f, 0.035f, 0.022f, 1.0f); glClear(GL_COLOR_BUFFER_BIT);
+        for (int y = 0; y < height; y += 6)
+            rect(0, static_cast<float>(y), static_cast<float>(width), 1, 0.12f, 0.075f, 0.035f, 0.22f);
+
+        const float scale = min(width / 1280.0f, height / 900.0f);
+        const float caseW = 930 * scale, caseH = 745 * scale;
+        const float caseX = (width - caseW) / 2, caseY = (height - caseH) / 2 - 16 * scale;
+        const float bezel = 58 * scale;
+        const float screenX = caseX + bezel, screenY = caseY + 82 * scale;
+        const float screenW = caseW - 2 * bezel, screenH = 500 * scale;
+
+        // Case shadow, cream plastic, bevel and the nearly-black curved-screen approximation.
+        rect(caseX + 16 * scale, caseY + 20 * scale, caseW, caseH, 0.025f, 0.014f, 0.008f, 0.72f);
+        rect(caseX, caseY, caseW, caseH, 0.62f, 0.47f, 0.28f);
+        rect(caseX + 10 * scale, caseY + 10 * scale, caseW - 20 * scale, caseH - 20 * scale, 0.78f, 0.63f, 0.39f);
+        rect(screenX - 16 * scale, screenY - 16 * scale, screenW + 32 * scale, screenH + 32 * scale, 0.13f, 0.10f, 0.055f);
+        rect(screenX - 7 * scale, screenY - 7 * scale, screenW + 14 * scale, screenH + 14 * scale, 0.025f, 0.035f, 0.026f);
+        rect(screenX, screenY, screenW, screenH, 0.0f, 0.075f, 0.039f);
+        for (int y = static_cast<int>(screenY); y < screenY + screenH; y += max(2, static_cast<int>(4 * scale)))
+            rect(screenX, static_cast<float>(y), screenW, 1, 0.0f, 0.0f, 0.0f, 0.36f);
+        rect(screenX, screenY, screenW, 2 * scale, 0.15f, 0.95f, 0.52f, 0.56f);
+
+        const float terminalScale = max(1.35f, 2.0f * scale);
+        const size_t columns = static_cast<size_t>((screenW - 36 * scale) / (6 * terminalScale));
+        const size_t rows = static_cast<size_t>((screenH - 60 * scale) / (9 * terminalScale));
+        text(screenX + 18 * scale, screenY + 16 * scale,
+             "CPU-16 MICROCOMPUTER  //  MONITOR 1  //  " + status,
+             terminalScale, 0.48f, 1.0f, 0.62f);
+        text(screenX + 18 * scale, screenY + 38 * scale,
+             "PROGRAM.ASM  READY   |   F5 RUN   F2 RESET   F1 HELP   F10 OFF",
+             terminalScale * .83f, 0.26f, 0.72f, 0.39f);
+
+        string display = showHelp
+            ? "*** CPU-16 TERMINAL HELP ***\n\nTYPE ASSEMBLY DIRECTLY AT THE END OF THE PROGRAM.\nBACKSPACE REMOVES A CHARACTER; ENTER STARTS A NEW LINE.\n\nF5   EXECUTE PROGRAM\nF2   RESET CPU, CACHE AND DISK\nF1   RETURN TO TERMINAL\nF10  POWER OFF TERMINAL\n\nNO MOUSE REQUIRED."
+            : editor + "\n> " + log;
+        auto terminalLines = linesFor(display, columns, rows);
+        float y = screenY + 62 * scale;
+        for (const auto& line : terminalLines) {
+            text(screenX + 18 * scale, y, line, terminalScale, 0.38f, 0.95f, 0.51f);
+            y += 9 * terminalScale;
+        }
+        if (!showHelp && cursorVisible && terminalLines.size() < rows)
+            text(screenX + 18 * scale, y, "_", terminalScale, 0.70f, 1.0f, 0.70f);
+
+        // Physical terminal details: maker plate, vents, power lamp, and keyboard-only legend.
+        rect(caseX + 34 * scale, caseY + caseH - 120 * scale, 250 * scale, 42 * scale, 0.48f, 0.35f, 0.20f);
+        text(caseX + 48 * scale, caseY + caseH - 107 * scale, "A R C A D E  1 6", 1.3f * scale, 0.12f, 0.09f, 0.05f);
+        text(caseX + 48 * scale, caseY + caseH - 91 * scale, "PERSONAL COMPUTER", 0.85f * scale, 0.12f, 0.09f, 0.05f);
+        for (int i = 0; i < 5; ++i)
+            rect(caseX + 38 * scale + i * 10 * scale, caseY + caseH - 55 * scale, 6 * scale, 3 * scale, 0.18f, 0.13f, 0.07f);
+        rect(caseX + caseW - 104 * scale, caseY + caseH - 108 * scale, 52 * scale, 26 * scale, 0.18f, 0.13f, 0.07f);
+        rect(caseX + caseW - 97 * scale, caseY + caseH - 101 * scale, 12 * scale, 12 * scale, 0.22f, 0.95f, 0.31f);
+        text(caseX + caseW - 166 * scale, caseY + caseH - 68 * scale, "POWER", 0.9f * scale, 0.18f, 0.13f, 0.07f);
+
+        rect(caseX + 122 * scale, caseY + caseH + 12 * scale, caseW - 244 * scale, 54 * scale, 0.43f, 0.32f, 0.19f);
+        text(caseX + 150 * scale, caseY + caseH + 30 * scale,
+             "[F5] RUN     [F2] REBOOT     [F1] HELP     [F10] POWER OFF",
+             1.35f * scale, 0.76f, 0.64f, 0.40f);
     }
 
 public:
-    ConsoleInterface() : cpu(&disk) {}
+    TerminalInterface() : cpu(&disk) {}
 
-    void run() {
-        cout << "========================================\n";
-        cout << "  16-BIT VIRTUAL COMPUTER v2.0\n";
-        cout << "  Disk: 10 MB, Cache: 512 bytes\n";
-        cout << "  Registers: AX BX CX DX SP BP SI DI\n";
-        cout << "  Flags: ZF CF SF OF DF\n";
-        cout << "========================================\n";
-        cout << "Type HELP for command list\n";
-        cout << "========================================\n";
-
-        while (running) {
-            cout << "\n> ";
-            string command;
-            getline(cin, command);
-            if (command.empty()) continue;
-
-            istringstream iss(command);
-            string cmd;
-            iss >> cmd;
-
-            // Convert to uppercase for case-insensitive commands
-            string cmdUpper = cmd;
-            transform(cmdUpper.begin(), cmdUpper.end(), cmdUpper.begin(), ::toupper);
-
-            if (cmdUpper == "PROGRAM" || cmdUpper == "PROG") {
-                string filename, eq, code;
-                iss >> filename >> eq;
-                getline(iss, code);
-                if (eq != "=") { cout << "Expected '='\n"; continue; }
-                code.erase(0, code.find_first_not_of(" \t"));
-                if (disk.createFile(filename)) {
-                    string line;
-                    istringstream codeStream(code);
-                    while (getline(codeStream, line, '|')) {
-                        line.erase(0, line.find_first_not_of(" \t"));
-                        disk.appendToFile(filename, line + "\n");
-                    }
-                    cout << "Program " << filename << " created\n";
-                } else cout << "Create error\n";
-            }
-            else if (cmdUpper == "APPEND") {
-                string filename, code;
-                iss >> filename;
-                getline(iss, code);
-                code.erase(0, code.find_first_not_of(" \t"));
-                if (!disk.fileExists(filename)) { cout << "File not found\n"; continue; }
-                string line;
-                istringstream codeStream(code);
-                while (getline(codeStream, line, '|')) {
-                    line.erase(0, line.find_first_not_of(" \t"));
-                    disk.appendToFile(filename, line + "\n");
-                }
-                cout << "Lines appended to " << filename << "\n";
-            }
-            else if (cmdUpper == "RUN" || cmdUpper == "EXEC") {
-                string filename; iss >> filename;
-                if (disk.fileExists(filename)) {
-                    cpu.setDebug(debugMode);
-                    cpu.executeProgram(disk.readFile(filename));
-                } else cout << "File not found\n";
-            }
-            else if (cmdUpper == "SHOW" || cmdUpper == "TYPE") {
-                string filename; iss >> filename;
-                if (disk.fileExists(filename)) {
-                    cout << "\n--- " << filename << " ---\n";
-                    cout << disk.readFile(filename);
-                    cout << "-----------------\n";
-                } else cout << "File not found\n";
-            }
-            else if (cmdUpper == "REGS") {
-                cpu.printRegs();
-            }
-            else if (cmdUpper == "RESET") {
-                disk.reset();
-                cpu.reset();
-                cout << "Reset complete\n";
-            }
-            else if (cmdUpper == "DEBUG" || cmdUpper == "DBG") {
-                string mode; iss >> mode;
-                string modeUpper = mode;
-                transform(modeUpper.begin(), modeUpper.end(), modeUpper.begin(), ::toupper);
-                if (modeUpper == "ON") { debugMode = true; cpu.setDebug(true); cout << "Debug ON\n"; }
-                else if (modeUpper == "OFF") { debugMode = false; cpu.setDebug(false); cout << "Debug OFF\n"; }
-                else cout << "Use DEBUG ON/OFF\n";
-            }
-            else if (cmdUpper == "DUMP") {
-                string addr, len; iss >> addr >> len;
-                uint32_t start = stoi(addr);
-                uint32_t length = stoi(len);
-                for (uint32_t i = 0; i < length; i += 16) {
-                    cout << "0x" << hex << setw(6) << setfill('0') << (start+i) << ": ";
-                    for (uint32_t j = 0; j < 16 && i+j < length; j++)
-                        cout << setw(2) << (int)disk.readFile("program.asm")[start+i+j] << " ";
-                    cout << "\n";
-                }
-            }
-            else if (cmdUpper == "PEEK") {
-                string addr; iss >> addr;
-                uint32_t a = stoi(addr);
-                cout << "0x" << hex << a << " = 0x" << setw(2) << (int)disk.readFile("program.asm")[a] << "\n";
-            }
-            else if (cmdUpper == "LS" || cmdUpper == "DIR") {
-                disk.listFiles();
-            }
-            else if (cmdUpper == "HELP" || cmdUpper == "H" || cmdUpper == "?") {
-                showHelp();
-            }
-            else if (cmdUpper == "EXIT" || cmdUpper == "QUIT") {
-                running = false;
-                cout << "Exiting...\n";
-            }
-            else {
-                cout << "Unknown command. Type HELP for list.\n";
-            }
+    int run() {
+        glfwSetErrorCallback(errorCallback);
+        if (!glfwInit()) return 1;
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+        if (!mode) { glfwTerminate(); return 1; }
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
+        glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+        window = glfwCreateWindow(mode->width, mode->height, "CPU/16 Green Phosphor", monitor, nullptr);
+        if (!window) { glfwTerminate(); return 1; }
+        glfwMakeContextCurrent(window);
+        glfwSwapInterval(1);
+        glfwSetWindowUserPointer(window, this);
+        glfwSetKeyCallback(window, keyCallback);
+        glfwSetCharCallback(window, charCallback);
+        while (!glfwWindowShouldClose(window)) {
+            const double now = glfwGetTime();
+            if (now - lastBlink > 0.55) { cursorVisible = !cursorVisible; lastBlink = now; }
+            int width, height; glfwGetFramebufferSize(window, &width, &height);
+            draw(width, height); glfwSwapBuffers(window); glfwPollEvents();
         }
+        glfwDestroyWindow(window); glfwTerminate();
+        return 0;
     }
 };
 
 int main() {
-    ConsoleInterface console;
-    console.run();
-    return 0;
+    TerminalInterface terminal;
+    return terminal.run();
 }
