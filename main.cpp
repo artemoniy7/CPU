@@ -486,33 +486,20 @@ private:
         auto* app = static_cast<TerminalInterface*>(glfwGetWindowUserPointer(window));
         if (!app) return;
         if (key == GLFW_KEY_ESCAPE || key == GLFW_KEY_F10) glfwSetWindowShouldClose(window, GLFW_TRUE);
+        else if (key == GLFW_KEY_F1) app->showHelp = !app->showHelp;
+        else if (app->showHelp) return;
         else if (key == GLFW_KEY_F5) app->runProgram();
         else if (key == GLFW_KEY_F2) app->resetMachine();
-        else if (key == GLFW_KEY_F1) app->showHelp = !app->showHelp;
         else if (key == GLFW_KEY_BACKSPACE && !app->editor.empty()) app->editor.pop_back();
         else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) app->editor += '\n';
     }
 
     static void charCallback(GLFWwindow* window, unsigned int codepoint) {
         auto* app = static_cast<TerminalInterface*>(glfwGetWindowUserPointer(window));
-        if (!app || codepoint < 32 || codepoint > 126) return;
+        if (!app || app->showHelp || codepoint < 32 || codepoint > 126) return;
         app->editor += static_cast<char>(codepoint);
     }
 
-    static void mouseCallback(GLFWwindow* window, int button, int action, int) {
-        if (button != GLFW_MOUSE_BUTTON_LEFT || action != GLFW_PRESS) return;
-        auto* app = static_cast<TerminalInterface*>(glfwGetWindowUserPointer(window));
-        if (!app) return;
-        double x, y;
-        glfwGetCursorPos(window, &x, &y);
-        int width, height;
-        glfwGetFramebufferSize(window, &width, &height);
-        const float top = static_cast<float>(height) - 78.0f;
-        if (y >= top && y <= top + 40.0f) {
-            if (x >= width - 310 && x < width - 155) app->resetMachine();
-            else if (x >= width - 145 && x <= width - 20) glfwSetWindowShouldClose(window, GLFW_TRUE);
-        }
-    }
 
     static const array<uint8_t, 7>& glyph(char c) {
         static const array<uint8_t, 7> empty{};
@@ -579,58 +566,70 @@ private:
         return lines;
     }
 
-    void drawPanel(float x, float y, float w, float h, const string& title) const {
-        rect(x, y, w, h, 0.015f, 0.08f, 0.045f);
-        rect(x, y, w, 1.5f, 0.12f, 0.9f, 0.45f);
-        text(x + 10, y + 8, "[ " + title + " ]", 2.0f, 0.45f, 1.0f, 0.62f);
-    }
-
     void draw(int width, int height) {
         glViewport(0, 0, width, height);
         glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, width, height, 0, -1, 1);
         glMatrixMode(GL_MODELVIEW); glLoadIdentity();
-        glClearColor(0.0f, 0.018f, 0.008f, 1.0f); glClear(GL_COLOR_BUFFER_BIT);
-        for (int y = 0; y < height; y += 4) rect(0, static_cast<float>(y), static_cast<float>(width), 1, 0.0f, 0.08f, 0.025f, 0.28f);
 
-        rect(18, 18, static_cast<float>(width - 36), 50, 0.02f, 0.16f, 0.07f);
-        text(36, 34, "CPU/16 :: GREEN PHOSPHOR WORKSTATION", 2.3f, 0.55f, 1.0f, 0.64f);
-        text(static_cast<float>(width - 278), 37, "STATUS: " + status, 1.6f, 0.45f, 1.0f, 0.56f);
+        // Desk-like backdrop and a warm, thick CRT enclosure inspired by 1980s terminals.
+        glClearColor(0.055f, 0.035f, 0.022f, 1.0f); glClear(GL_COLOR_BUFFER_BIT);
+        for (int y = 0; y < height; y += 6)
+            rect(0, static_cast<float>(y), static_cast<float>(width), 1, 0.12f, 0.075f, 0.035f, 0.22f);
 
-        const float top = 86, bottom = static_cast<float>(height - 24), usable = bottom - top;
-        const float leftW = width * 0.57f, gap = 14, rightX = 18 + leftW + gap, rightW = width - rightX - 18;
-        drawPanel(18, top, leftW, usable, "PROGRAM.ASM  //  EDITOR");
-        drawPanel(rightX, top, rightW, usable * 0.62f, "EXECUTION LOG");
-        drawPanel(rightX, top + usable * 0.64f, rightW, usable * 0.36f, "CONTROL DECK");
+        const float scale = min(width / 1280.0f, height / 900.0f);
+        const float caseW = 930 * scale, caseH = 745 * scale;
+        const float caseX = (width - caseW) / 2, caseY = (height - caseH) / 2 - 16 * scale;
+        const float bezel = 58 * scale;
+        const float screenX = caseX + bezel, screenY = caseY + 82 * scale;
+        const float screenW = caseW - 2 * bezel, screenH = 500 * scale;
 
-        const float codeScale = max(1.5f, min(2.3f, width / 750.0f));
-        auto sourceLines = linesFor(editor, static_cast<size_t>((leftW - 45) / (6 * codeScale)), static_cast<size_t>((usable - 58) / (9 * codeScale)));
-        float y = top + 48;
-        for (size_t i = 0; i < sourceLines.size(); ++i) {
-            ostringstream number; number << setw(2) << setfill('0') << i + 1;
-            text(32, y, number.str(), codeScale, 0.13f, 0.46f, 0.24f);
-            text(68, y, sourceLines[i], codeScale, 0.58f, 1.0f, 0.66f); y += 9 * codeScale;
+        // Case shadow, cream plastic, bevel and the nearly-black curved-screen approximation.
+        rect(caseX + 16 * scale, caseY + 20 * scale, caseW, caseH, 0.025f, 0.014f, 0.008f, 0.72f);
+        rect(caseX, caseY, caseW, caseH, 0.62f, 0.47f, 0.28f);
+        rect(caseX + 10 * scale, caseY + 10 * scale, caseW - 20 * scale, caseH - 20 * scale, 0.78f, 0.63f, 0.39f);
+        rect(screenX - 16 * scale, screenY - 16 * scale, screenW + 32 * scale, screenH + 32 * scale, 0.13f, 0.10f, 0.055f);
+        rect(screenX - 7 * scale, screenY - 7 * scale, screenW + 14 * scale, screenH + 14 * scale, 0.025f, 0.035f, 0.026f);
+        rect(screenX, screenY, screenW, screenH, 0.0f, 0.075f, 0.039f);
+        for (int y = static_cast<int>(screenY); y < screenY + screenH; y += max(2, static_cast<int>(4 * scale)))
+            rect(screenX, static_cast<float>(y), screenW, 1, 0.0f, 0.0f, 0.0f, 0.36f);
+        rect(screenX, screenY, screenW, 2 * scale, 0.15f, 0.95f, 0.52f, 0.56f);
+
+        const float terminalScale = max(1.35f, 2.0f * scale);
+        const size_t columns = static_cast<size_t>((screenW - 36 * scale) / (6 * terminalScale));
+        const size_t rows = static_cast<size_t>((screenH - 60 * scale) / (9 * terminalScale));
+        text(screenX + 18 * scale, screenY + 16 * scale,
+             "CPU-16 MICROCOMPUTER  //  MONITOR 1  //  " + status,
+             terminalScale, 0.48f, 1.0f, 0.62f);
+        text(screenX + 18 * scale, screenY + 38 * scale,
+             "PROGRAM.ASM  READY   |   F5 RUN   F2 RESET   F1 HELP   F10 OFF",
+             terminalScale * .83f, 0.26f, 0.72f, 0.39f);
+
+        string display = showHelp
+            ? "*** CPU-16 TERMINAL HELP ***\n\nTYPE ASSEMBLY DIRECTLY AT THE END OF THE PROGRAM.\nBACKSPACE REMOVES A CHARACTER; ENTER STARTS A NEW LINE.\n\nF5   EXECUTE PROGRAM\nF2   RESET CPU, CACHE AND DISK\nF1   RETURN TO TERMINAL\nF10  POWER OFF TERMINAL\n\nNO MOUSE REQUIRED."
+            : editor + "\n> " + log;
+        auto terminalLines = linesFor(display, columns, rows);
+        float y = screenY + 62 * scale;
+        for (const auto& line : terminalLines) {
+            text(screenX + 18 * scale, y, line, terminalScale, 0.38f, 0.95f, 0.51f);
+            y += 9 * terminalScale;
         }
-        if (cursorVisible && sourceLines.size() < 22) text(68 + (sourceLines.empty() ? 0 : sourceLines.back().size() * 6 * codeScale), y - 9 * codeScale, "_", codeScale, 0.7f, 1.0f, 0.72f);
+        if (!showHelp && cursorVisible && terminalLines.size() < rows)
+            text(screenX + 18 * scale, y, "_", terminalScale, 0.70f, 1.0f, 0.70f);
 
-        const float logScale = max(1.3f, min(1.8f, rightW / 390.0f));
-        auto logLines = linesFor(log, static_cast<size_t>((rightW - 30) / (6 * logScale)), static_cast<size_t>((usable * .62f - 58) / (9 * logScale)));
-        y = top + 48;
-        for (const auto& line : logLines) { text(rightX + 14, y, line, logScale, 0.35f, 0.9f, 0.48f); y += 9 * logScale; }
+        // Physical terminal details: maker plate, vents, power lamp, and keyboard-only legend.
+        rect(caseX + 34 * scale, caseY + caseH - 120 * scale, 250 * scale, 42 * scale, 0.48f, 0.35f, 0.20f);
+        text(caseX + 48 * scale, caseY + caseH - 107 * scale, "A R C A D E  1 6", 1.3f * scale, 0.12f, 0.09f, 0.05f);
+        text(caseX + 48 * scale, caseY + caseH - 91 * scale, "PERSONAL COMPUTER", 0.85f * scale, 0.12f, 0.09f, 0.05f);
+        for (int i = 0; i < 5; ++i)
+            rect(caseX + 38 * scale + i * 10 * scale, caseY + caseH - 55 * scale, 6 * scale, 3 * scale, 0.18f, 0.13f, 0.07f);
+        rect(caseX + caseW - 104 * scale, caseY + caseH - 108 * scale, 52 * scale, 26 * scale, 0.18f, 0.13f, 0.07f);
+        rect(caseX + caseW - 97 * scale, caseY + caseH - 101 * scale, 12 * scale, 12 * scale, 0.22f, 0.95f, 0.31f);
+        text(caseX + caseW - 166 * scale, caseY + caseH - 68 * scale, "POWER", 0.9f * scale, 0.18f, 0.13f, 0.07f);
 
-        const float controlsY = top + usable * .64f + 48;
-        text(rightX + 14, controlsY, "F5  RUN PROGRAM", 1.8f, 0.55f, 1.0f, 0.62f);
-        text(rightX + 14, controlsY + 26, "F2  REBOOT MACHINE", 1.8f, 0.40f, 0.95f, 0.55f);
-        text(rightX + 14, controlsY + 52, "F1  HELP OVERLAY", 1.8f, 0.40f, 0.95f, 0.55f);
-        text(rightX + 14, controlsY + 78, "F10 / ESC  POWER OFF", 1.8f, 0.40f, 0.95f, 0.55f);
-        if (showHelp) {
-            rect(70, 95, static_cast<float>(width - 140), static_cast<float>(height - 190), 0.0f, 0.12f, 0.045f, 0.97f);
-            text(100, 130, "CPU/16 FIELD MANUAL", 3.0f, 0.60f, 1.0f, 0.67f);
-            text(100, 185, "TYPE DIRECTLY IN THE LEFT EDITOR.\nF5 RUNS THE ASSEMBLY PROGRAM.\nF2 RESETS CPU, CACHE AND DISK.\nCLICK REBOOT OR POWER OFF IN THE FOOTER.\nPRESS F1 TO CLOSE THIS OVERLAY.", 2.2f, 0.48f, 1.0f, 0.60f);
-        }
-        rect(static_cast<float>(width - 310), static_cast<float>(height - 78), 155, 40, 0.04f, 0.28f, 0.10f);
-        rect(static_cast<float>(width - 145), static_cast<float>(height - 78), 125, 40, 0.22f, 0.06f, 0.04f);
-        text(static_cast<float>(width - 298), static_cast<float>(height - 66), "REBOOT [F2]", 1.6f, 0.6f, 1.0f, 0.65f);
-        text(static_cast<float>(width - 133), static_cast<float>(height - 66), "POWER OFF", 1.6f, 1.0f, 0.56f, 0.48f);
+        rect(caseX + 122 * scale, caseY + caseH + 12 * scale, caseW - 244 * scale, 54 * scale, 0.43f, 0.32f, 0.19f);
+        text(caseX + 150 * scale, caseY + caseH + 30 * scale,
+             "[F5] RUN     [F2] REBOOT     [F1] HELP     [F10] POWER OFF",
+             1.35f * scale, 0.76f, 0.64f, 0.40f);
     }
 
 public:
@@ -652,7 +651,6 @@ public:
         glfwSetWindowUserPointer(window, this);
         glfwSetKeyCallback(window, keyCallback);
         glfwSetCharCallback(window, charCallback);
-        glfwSetMouseButtonCallback(window, mouseCallback);
         while (!glfwWindowShouldClose(window)) {
             const double now = glfwGetTime();
             if (now - lastBlink > 0.55) { cursorVisible = !cursorVisible; lastBlink = now; }
